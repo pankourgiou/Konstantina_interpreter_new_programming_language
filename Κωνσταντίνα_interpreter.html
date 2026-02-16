@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<title>Κωνσταντίνα — Web Interpreter</title>
+<style>
+body{background:#0f1720;color:#e6eef8;font-family:monospace;padding:20px;}
+h1{color:#3b82f6;text-align:center;margin-bottom:20px;}
+textarea{width:100%;height:250px;background:#111827;color:#e6eef8;padding:10px;border-radius:5px;border:none;font-family:monospace;}
+button,select{padding:8px 12px;margin:4px;border-radius:6px;border:none;background:#3b82f6;color:white;cursor:pointer;}
+#main{display:grid;grid-template-columns:1fr 400px;gap:12px}
+#output{background:#111827;padding:10px;border-radius:6px;min-height:150px;white-space:pre-wrap;overflow:auto;border:1px solid #0b1220;margin-bottom:6px}
+canvas{background:white;border-radius:6px;border:1px solid #ccc;margin-bottom:6px}
+#gui{background:#111827;padding:6px;border-radius:6px;min-height:40px;border:1px solid #0b1220;margin-top:6px}
+</style>
+</head>
+<body>
+
+<h1>Κωνσταντίνα — Web Interpreter</h1>
+
+<div id="main">
+  <div>
+    <label>Κώδικας Κωνσταντίνα:</label>
+    <textarea id="code"></textarea>
+    <div>
+      <select id="exampleSelect">
+        <option value="">-- Επιλογή Παραδείγματος --</option>
+        <option value="clock">Αναλογικό Ρολόι</option>
+        <option value="hello">Γράψε Χαίρε</option>
+        <option value="math">Μαθηματικοί Υπολογισμοί</option>
+        <option value="while_simple">Απλός Όσο Βρόχος</option>
+        <option value="if_nested">Nested Αν-Αλλιώς</option>
+        <option value="factorial">Συνάρτηση: Παραγοντικό</option>
+        <option value="fibonacci">Συνάρτηση: Fibonacci</option>
+        <option value="label">Γράψε σε Ετικέτα</option>
+        <option value="time">Τρέχουσα Ώρα</option>
+        <option value="vars">Μεταβλητές & Τύπωση</option>
+      </select>
+      <button onclick="loadExample()">Φόρτωσε</button>
+      <button onclick="runCode()">Τρέξε</button>
+      <button onclick="resetState()">Επαναφορά</button>
+      <button onclick="showHelp()">Βοήθεια</button>
+    </div>
+  </div>
+
+  <div>
+    <div id="output">Καλώς ήρθες στην Κωνσταντίνα — διάλεξε παράδειγμα ή γράψε κώδικα και πάτησε "Τρέξε".</div>
+    <canvas id="canvas" width="380" height="300"></canvas>
+    <div id="gui"></div>
+  </div>
+</div>
+
+<script>
+// === Interpreter Κωνσταντίνα ===
+class Interpreter {
+  constructor(outputEl, canvasEl, guiEl){
+    this.outputEl=outputEl; this.canvas=canvasEl; this.ctx=canvasEl.getContext('2d'); this.guiEl=guiEl; this.reset();
+  }
+
+  reset(){
+    this.vars={}; this.funcs={}; this.gui={}; this.clearOutput(); this.clearCanvas(); this.guiEl.innerHTML=''; this.clockActive=false;
+  }
+
+  clearOutput(){ this.outputEl.textContent=''; }
+  appendOutput(s){ this.outputEl.textContent+=s+'\n'; this.outputEl.scrollTop=this.outputEl.scrollHeight; }
+  clearCanvas(){ this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height); }
+
+  evalExpr(expr){
+    try{
+      let f=new Function('vars','Math','Date','canvas','ctx','with(vars){return ('+expr+');}');
+      return f(this.vars,Math,Date,this.canvas,this.ctx);
+    }catch(e){ throw new Error('Σφάλμα έκφρασης: '+e.message+' ('+expr+')'); }
+  }
+
+  collectBlock(lines,start){
+    let block=[],depth=0,i=start;
+    while(i<lines.length){
+      let line=lines[i].trim();
+      if(line.startsWith('αν ')||line.startsWith('όσο ')||line.startsWith('συνάρτηση ')) depth++;
+      if(line==='τέλος'){ if(depth===0) return {block,end:i}; else depth--; }
+      block.push(lines[i]); i++;
+    }
+    throw new Error("Λείπει 'τέλος' για κάποιο μπλοκ");
+  }
+
+  run(lines){
+    for(let i=0;i<lines.length;i++){
+      let raw=lines[i], line=raw.trim();
+      if(!line || line.startsWith('#')) continue;
+
+      // GUI commands
+      if(line.startsWith('δημιούργησε_παράθυρο')){ document.title=line.split('"')[1]||'Κωνσταντίνα'; this.gui.root=true; continue; }
+      if(line.startsWith('δημιούργησε_καμβά')){ let p=line.split(/\s+/); this.canvas.width=parseInt(p[1]||380); this.canvas.height=parseInt(p[2]||300); this.ctx=this.canvas.getContext('2d'); this.clearCanvas(); continue; }
+      if(line.startsWith('γράψε_σε_ετικέτα')){
+        let p=line.split('"'), name=p[1]||'label', text=p[3]||'';
+        let el=this.gui[name]; if(!el){ el=document.createElement('div'); el.style.padding='6px'; el.style.marginBottom='6px'; el.style.background='#0b1220'; el.style.color='#e6eef8'; this.guiEl.appendChild(el); this.gui[name]=el; }
+        el.textContent=text; continue;
+      }
+      if(line==='αναλογικό_ρολόι'){ this.startAnalogClock(); continue; }
+      if(line==='τρέξε'){ continue; }
+
+      // standard commands
+      if(line.startsWith('γράψε ')){ this.appendOutput(String(this.evalExpr(line.slice(6).trim()))); continue; }
+      if(line.startsWith('θέσε ')){ let right=line.slice(5).trim(),idx=right.indexOf('='); if(idx===-1) throw new Error("Λείπει '='"); let name=right.slice(0,idx).trim(); this.vars[name]=this.evalExpr(right.slice(idx+1).trim()); continue; }
+      if(line.startsWith('αν ')){
+        let cond=line.slice(2).trim(); if(cond.endsWith(':')) cond=cond.slice(0,-1).trim();
+        let {block,end}=this.collectBlock(lines,i+1); let trimmed=block.map(l=>l.trim()), elseIndex=trimmed.indexOf('αλλιώς:');
+        let ifBlock=block, elseBlock=[]; if(elseIndex!==-1){ ifBlock=block.slice(0,elseIndex); elseBlock=block.slice(elseIndex+1); }
+        if(this.evalExpr(cond)){ let r=this.run(ifBlock); if(r?.type==='return') return r; } else { let r=this.run(elseBlock); if(r?.type==='return') return r; }
+        i=end; continue;
+      }
+      if(line.startsWith('όσο ')){
+        let cond=line.slice(4).trim(); if(cond.endsWith(':')) cond=cond.slice(0,-1).trim();
+        let {block,end}=this.collectBlock(lines,i+1);
+        while(this.evalExpr(cond)){ let r=this.run(block); if(r?.type==='return') return r; }
+        i=end; continue;
+      }
+      if(line.startsWith('συνάρτηση ')){
+        let rest=line.slice(10).trim(), name=rest.split('(')[0].trim(); let paramsRaw=rest.split('(')[1]; if(!paramsRaw) throw new Error('Σύνταξη συνάρτησης λάθος'); let params=paramsRaw.split(')')[0].trim().split(',').map(s=>s.trim()).filter(s=>s.length>0);
+        let {block,end}=this.collectBlock(lines,i+1); this.funcs[name]={params,body:block}; this.vars[name]=(...args)=>this.callFunc(name,...args); i=end; continue;
+      }
+      if(line.startsWith('επέστρεψε ')){ return {type:'return', value:this.evalExpr(line.slice(9).trim())}; }
+
+      throw new Error('Άγνωστη εντολή: '+line);
+    }
+    return {type:'normal'};
+  }
+
+  callFunc(name,...args){ let f=this.funcs[name]; if(!f) throw new Error('Άγνωστη συνάρτηση: '+name); let backup={...this.vars}; for(let i=0;i<f.params.length;i++) this.vars[f.params[i]]=args[i]; let r=this.run(f.body); this.vars=backup; return r?.value; }
+
+  startAnalogClock(){
+    if(this.clockActive) return; this.clockActive=true;
+    const draw=()=>{
+      if(!this.clockActive) return;
+      let w=this.canvas.width,h=this.canvas.height,cx=w/2,cy=h/2,r=Math.min(w,h)/2-20;
+      this.ctx.clearRect(0,0,w,h);
+      this.ctx.beginPath(); this.ctx.lineWidth=4; this.ctx.strokeStyle='#333'; this.ctx.arc(cx,cy,r,0,2*Math.PI); this.ctx.stroke();
+      this.ctx.fillStyle='#000'; this.ctx.font=Math.round(r*0.12)+'px Arial';
+      for(let n=1;n<=12;n++){ let ang=n*30*Math.PI/180-Math.PI/2; this.ctx.fillText(n,cx+Math.cos(ang)*(r-30)-6,cy+Math.sin(ang)*(r-30)+6);}
+      let now=new Date(),sec=now.getSeconds(),min=now.getMinutes(),hr=now.getHours()%12;
+      this.drawLine(cx,cy,cx+Math.cos(sec*6*Math.PI/180-Math.PI/2)*(r-20),cy+Math.sin(sec*6*Math.PI/180-Math.PI/2)*(r-20),'red',1);
+      this.drawLine(cx,cy,cx+Math.cos(min*6*Math.PI/180-Math.PI/2)*(r-40),cy+Math.sin(min*6*Math.PI/180-Math.PI/2)*(r-40),'#222',3);
+      this.drawLine(cx,cy,cx+Math.cos((hr*30+min*0.5)*Math.PI/180-Math.PI/2)*(r-70),cy+Math.sin((hr*30+min*0.5)*Math.PI/180-Math.PI/2)*(r-70),'#222',5);
+      this.ctx.beginPath(); this.ctx.arc(cx,cy,5,0,2*Math.PI); this.ctx.fill();
+      requestAnimationFrame(draw);
+    }; draw();
+  }
+
+  drawLine(x1,y1,x2,y2,color,width){ this.ctx.strokeStyle=color; this.ctx.lineWidth=width; this.ctx.beginPath(); this.ctx.moveTo(x1,y1); this.ctx.lineTo(x2,y2); this.ctx.stroke();}
+}
+
+// === Setup ===
+const outputEl=document.getElementById('output'),canvasEl=document.getElementById('canvas'),guiEl=document.getElementById('gui');
+const interpreter=new Interpreter(outputEl,canvasEl,guiEl);
+
+function resetState(){ interpreter.reset(); document.getElementById('code').value=''; document.getElementById('exampleSelect').value=''; }
+function runCode(){ interpreter.clearOutput(); interpreter.clearCanvas(); interpreter.guiEl.innerHTML=''; try{ interpreter.run(document.getElementById('code').value.replace(/\r/g,'').split('\n')); }catch(e){ interpreter.appendOutput('Σφάλμα: '+e.message);} }
+
+function showHelp(){ interpreter.clearOutput(); interpreter.appendOutput(`Βοήθεια Κωνσταντίνας:
+
+θέσε x = 10
+γράψε x + 5
+
+αν συνθήκη:
+    ...
+αλλιώς:
+    ...
+τέλος
+
+όσο συνθήκη:
+    ...
+τέλος
+
+συνάρτηση όνομα(παρ1,παρ2):
+    ...
+    επέστρεψε τιμή
+τέλος
+
+GUI:
+δημιούργησε_παράθυρο "Τίτλος"
+δημιούργησε_καμβά 380 300
+γράψε_σε_ετικέτα "Όνομα" "Κείμενο"
+αναλογικό_ρολόι`); }
+
+// === Παραδείγματα ===
+const EXAMPLES = {
+clock:`δημιούργησε_παράθυρο "Ρολόι"
+δημιούργησε_καμβά 380 300
+αναλογικό_ρολόι`,
+hello:`γράψε "Γεια σου κόσμε!"
+γράψε "Καλώς ήρθες στην Κωνσταντίνα!"`,
+math:`θέσε x = 5
+θέσε y = 7
+γράψε x + y
+γράψε x * y`,
+while_simple:`θέσε i = 0
+όσο i < 5:
+    γράψε i
+    θέσε i = i + 1
+τέλος`,
+if_nested:`θέσε βαθμος=78
+αν βαθμος>=90:
+    γράψε "Άριστα"
+αλλιώς:
+    αν βαθμος>=75:
+        γράψε "Καλά"
+    αλλιώς:
+        αν βαθμος>=50:
+            γράψε "Μέτρια"
+        αλλιώς:
+            γράψε "Ανεπαρκής"
+        τέλος
+    τέλος
+τέλος`,
+factorial:`συνάρτηση fact(n):
+    αν n<=1:
+        επέστρεψε 1
+    αλλιώς:
+        επέστρεψε n*fact(n-1)
+    τέλος
+τέλος
+γράψε "5! = "+fact(5)`,
+fibonacci:`συνάρτηση fib(n):
+    αν n<=0:
+        επέστρεψε 0
+    τέλος
+    αν n==1:
+        επέστρεψε 1
+    τέλος
+    θέσε a = 0
+    θέσε b = 1
+    θέσε i = 2
+    όσο i <= n:
+        θέσε tmp = a + b
+        θέσε a = b
+        θέσε b = tmp
+        θέσε i = i + 1
+    τέλος
+    επέστρεψε b
+τέλος
+γράψε "fib(10) = "+fib(10)`,
+label:`γράψε_σε_ετικέτα "Μήνυμα" "Καλημέρα!"`,
+time:`γράψε "Η ώρα είναι "+(new Date()).toLocaleTimeString()`,
+vars:`θέσε a=3
+θέσε b=4
+θέσε c=a*(b+2)
+γράψε "a="+a
+γράψε "b="+b
+γράψε "c="+c
+γράψε "Τέλος παραδείγματος"`
+};
+
+function loadExample(){ let key=document.getElementById('exampleSelect').value; if(!key) return; document.getElementById('code').value=EXAMPLES[key]||''; interpreter.clearOutput(); interpreter.appendOutput('Φορτώθηκε παράδειγμα: '+key); }
+
+document.getElementById('code').value=EXAMPLES.hello;
+interpreter.clearOutput();
+interpreter.appendOutput('Επιλέξτε παράδειγμα και πατήστε "Τρέξε".');
+</script>
+
+</body>
+</html>
+
